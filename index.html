@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -32,6 +33,7 @@
       font-size: 16px;
       font-weight: bold;
     }
+    button:disabled { opacity: 0.6; }
     #leitor { margin-top: 16px; }
     #mensagem {
       margin-top: 12px;
@@ -51,61 +53,107 @@
 </main>
 
 <script>
-  // Aplicação patrimonial já publicada.
   const APP_URL =
     "https://script.google.com/macros/s/AKfycbwtc7P8xFefVvwFSMQHxDcGs-K4aWwbBwTrdyI5qH2JmoNIIhK1t5DbpdecyuXexLoVuQ/exec";
 
   let leitor = null;
   let ocupado = false;
+  let codigoProcessado = false;
+
+  const mensagem = document.getElementById("mensagem");
+  const botaoIniciar = document.getElementById("iniciar");
+  const botaoParar = document.getElementById("parar");
 
   async function iniciarLeitor() {
     if (ocupado) return;
 
+    if (!window.isSecureContext) {
+      mensagem.textContent =
+        "A câmera exige uma página HTTPS segura.";
+      return;
+    }
+
     if (typeof Html5Qrcode === "undefined") {
-      document.getElementById("mensagem").textContent =
-        "Não foi possível carregar a biblioteca. Verifique a internet.";
+      mensagem.textContent =
+        "Biblioteca de leitura indisponível. Verifique a internet e recarregue a página.";
       return;
     }
 
     ocupado = true;
-    document.getElementById("iniciar").disabled = true;
-    document.getElementById("mensagem").textContent =
-      "Solicitando acesso à câmera...";
+    codigoProcessado = false;
+    botaoIniciar.disabled = true;
+    mensagem.textContent = "Verificando câmeras disponíveis...";
 
     try {
       leitor = new Html5Qrcode("leitor");
 
+      // Solicita as câmeras disponíveis e identifica a traseira.
+      const cameras = await Html5Qrcode.getCameras();
+
+      if (!cameras || cameras.length === 0) {
+        throw new Error(
+          "Nenhuma câmera foi encontrada. Confira as permissões do Chrome."
+        );
+      }
+
+      const cameraTraseira =
+        cameras.find(c => /back|rear|environment|traseira/i.test(c.label))
+        || cameras[cameras.length - 1];
+
+      mensagem.textContent = "Solicitando acesso à câmera...";
+
       await leitor.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 120 } },
+        cameraTraseira.id,
+        {
+          fps: 10,
+          qrbox: { width: 280, height: 120 }
+        },
         async (codigo) => {
+          if (codigoProcessado) return;
+
           const bpm = String(codigo || "").trim();
           if (!bpm) return;
 
-          document.getElementById("mensagem").textContent =
+          codigoProcessado = true;
+          mensagem.textContent =
             "Código lido: " + bpm + ". Abrindo pesquisa...";
 
           await pararLeitor();
 
+          // Redireciona somente depois de ler o código.
           window.location.href =
             APP_URL + "?bpm=" + encodeURIComponent(bpm);
         },
         () => {}
       );
 
-      document.getElementById("mensagem").textContent =
+      mensagem.textContent =
         "Câmera ativa. Posicione o código de barras na área de leitura.";
-      document.getElementById("parar").hidden = false;
+      botaoParar.hidden = false;
+
     } catch (erro) {
-      document.getElementById("mensagem").textContent =
-        "Não foi possível abrir a câmera: " +
-        (erro.message || erro);
       if (leitor) {
-        try { leitor.clear(); } catch (e) {}
+        try {
+          if (leitor.isScanning) await leitor.stop();
+        } catch (e) {}
+
+        try {
+          leitor.clear();
+        } catch (e) {}
+
         leitor = null;
       }
+
       ocupado = false;
-      document.getElementById("iniciar").disabled = false;
+      botaoIniciar.disabled = false;
+
+      const detalhe = erro && erro.name
+        ? erro.name + ": " + erro.message
+        : String(erro);
+
+      mensagem.textContent =
+        "Falha ao iniciar a câmera. " + detalhe +
+        ". Confira a permissão de câmera do site no Chrome.";
     }
   }
 
@@ -115,11 +163,16 @@
         if (leitor.isScanning) await leitor.stop();
       } catch (e) {}
 
-      try { leitor.clear(); } catch (e) {}
+      try {
+        leitor.clear();
+      } catch (e) {}
+
       leitor = null;
     }
 
-    document.getElementById("parar").hidden = true;
+    botaoParar.hidden = true;
+    botaoIniciar.disabled = false;
+    ocupado = false;
   }
 </script>
 </body>
