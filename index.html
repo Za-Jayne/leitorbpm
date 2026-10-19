@@ -5,7 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Leitor BPM</title>
+
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -14,6 +17,7 @@
       background: #f4f6f8;
       color: #202124;
     }
+
     main {
       max-width: 520px;
       margin: auto;
@@ -21,41 +25,125 @@
       padding: 18px;
       border-radius: 12px;
     }
+
     h2 { color: #174ea6; }
-    button {
+
+    button, input {
+      box-sizing: border-box;
       width: 100%;
       padding: 14px;
       margin-top: 12px;
       border: 0;
       border-radius: 8px;
+      font-size: 16px;
+    }
+
+    button {
       background: #174ea6;
       color: white;
-      font-size: 16px;
       font-weight: bold;
+      cursor: pointer;
     }
+
     button:disabled { opacity: 0.6; }
-    #leitor { margin-top: 16px; }
-    #mensagem {
+
+    input {
+      border: 1px solid #dadce0;
+      background: white;
+      color: #202124;
+    }
+
+    .botao-secundario { background: #188038; }
+    .botao-fechar { background: #5f6368; }
+
+    #leitor, #painelOCR { margin-top: 16px; }
+
+    #mensagem, #mensagemOCR {
       margin-top: 12px;
       overflow-wrap: anywhere;
+      font-size: 14px;
     }
+
+    #videoOCR {
+      width: 100%;
+      margin-top: 12px;
+      border-radius: 8px;
+      background: #202124;
+    }
+
+    .instrucao {
+      color: #5f6368;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    [hidden] { display: none !important; }
   </style>
 </head>
+
 <body>
 <main>
   <h2>Leitor de BPM</h2>
-  <p>Toque no botão e aponte a câmera para o código de barras do patrimônio.</p>
 
-  <button id="iniciar" onclick="iniciarLeitor()">Abrir câmera</button>
+  <p class="instrucao">
+    Escolha uma opção: leitura do código de barras ou reconhecimento
+    do BPM impresso na etiqueta.
+  </p>
+
+  <button id="iniciar" onclick="iniciarLeitor()">
+    Ler código de barras
+  </button>
+
   <div id="leitor"></div>
-  <div id="mensagem" aria-live="polite">Aguardando início.</div>
-  <button id="parar" onclick="pararLeitor()" hidden>Fechar câmera</button>
+
+  <button id="parar" class="botao-fechar"
+    onclick="pararLeitor()" hidden>
+    Fechar leitor de código de barras
+  </button>
+
+  <hr style="margin-top:20px;border:0;border-top:1px solid #dadce0">
+
+  <button id="iniciarOCR" class="botao-secundario"
+    onclick="iniciarOCR()">
+    Testar OCR — ler BPM impresso
+  </button>
+
+  <div id="painelOCR" hidden>
+    <p class="instrucao">
+      Mantenha a etiqueta bem iluminada, aproxime a câmera e centralize
+      os números impressos. Evite reflexos e movimentos.
+    </p>
+
+    <video id="videoOCR" autoplay playsinline muted></video>
+
+    <div id="mensagemOCR" aria-live="polite">
+      Aguardando início do OCR.
+    </div>
+
+    <label for="bpmOCR">BPM reconhecido — confira antes de pesquisar:</label>
+    <input id="bpmOCR" type="text"
+      placeholder="O BPM aparecerá aqui"
+      autocomplete="off">
+
+    <button id="confirmarOCR" onclick="confirmarOCR()">
+      Confirmar BPM e pesquisar
+    </button>
+
+    <button class="botao-fechar" onclick="pararOCR()">
+      Fechar câmera OCR
+    </button>
+  </div>
+
+  <div id="mensagem" aria-live="polite">
+    Aguardando início.
+  </div>
 </main>
 
 <script>
   const APP_URL =
     "https://script.google.com/macros/s/AKfycbwtc7P8xFefVvwFSMQHxDcGs-K4aWwbBwTrdyI5qH2JmoNIIhK1t5DbpdecyuXexLoVuQ/exec";
 
+  // Leitor de código de barras existente.
   let leitor = null;
   let ocupado = false;
   let codigoProcessado = false;
@@ -75,9 +163,12 @@
 
     if (typeof Html5Qrcode === "undefined") {
       mensagem.textContent =
-        "Biblioteca de leitura indisponível. Verifique a internet e recarregue a página.";
+        "Biblioteca do leitor indisponível. Verifique a internet.";
       return;
     }
+
+    // Evita duas câmeras simultâneas.
+    pararOCR();
 
     ocupado = true;
     codigoProcessado = false;
@@ -87,28 +178,26 @@
     try {
       leitor = new Html5Qrcode("leitor");
 
-      // Solicita as câmeras disponíveis e identifica a traseira.
       const cameras = await Html5Qrcode.getCameras();
 
       if (!cameras || cameras.length === 0) {
-        throw new Error(
-          "Nenhuma câmera foi encontrada. Confira as permissões do Chrome."
-        );
+        throw new Error("Nenhuma câmera encontrada.");
       }
 
-      const cameraTraseira =
-        cameras.find(c => /back|rear|environment|traseira/i.test(c.label))
-        || cameras[cameras.length - 1];
+      const traseira =
+        cameras.find(c =>
+          /back|rear|environment|traseira/i.test(c.label)
+        ) || cameras[cameras.length - 1];
 
       mensagem.textContent = "Solicitando acesso à câmera...";
 
       await leitor.start(
-        cameraTraseira.id,
+        traseira.id,
         {
           fps: 10,
           qrbox: { width: 280, height: 120 }
         },
-        async (codigo) => {
+        async codigo => {
           if (codigoProcessado) return;
 
           const bpm = String(codigo || "").trim();
@@ -120,7 +209,6 @@
 
           await pararLeitor();
 
-          // Redireciona somente depois de ler o código.
           window.location.href =
             APP_URL + "?bpm=" + encodeURIComponent(bpm);
         },
@@ -137,23 +225,17 @@
           if (leitor.isScanning) await leitor.stop();
         } catch (e) {}
 
-        try {
-          leitor.clear();
-        } catch (e) {}
-
+        try { leitor.clear(); } catch (e) {}
         leitor = null;
       }
 
       ocupado = false;
       botaoIniciar.disabled = false;
 
-      const detalhe = erro && erro.name
-        ? erro.name + ": " + erro.message
-        : String(erro);
-
       mensagem.textContent =
-        "Falha ao iniciar a câmera. " + detalhe +
-        ". Confira a permissão de câmera do site no Chrome.";
+        "Falha ao iniciar o leitor: " +
+        (erro.name ? erro.name + ": " : "") +
+        (erro.message || String(erro));
     }
   }
 
@@ -163,16 +245,223 @@
         if (leitor.isScanning) await leitor.stop();
       } catch (e) {}
 
-      try {
-        leitor.clear();
-      } catch (e) {}
-
+      try { leitor.clear(); } catch (e) {}
       leitor = null;
     }
 
     botaoParar.hidden = true;
     botaoIniciar.disabled = false;
     ocupado = false;
+  }
+
+  // OCR: reconhece o texto impresso na imagem da câmera.
+  let streamOCR = null;
+  let workerOCR = null;
+  let pararProcessamentoOCR = false;
+  let processandoOCR = false;
+  let sessaoOCR = 0;
+
+  async function iniciarOCR() {
+    const painel = document.getElementById("painelOCR");
+    const video = document.getElementById("videoOCR");
+    const status = document.getElementById("mensagemOCR");
+    const botao = document.getElementById("iniciarOCR");
+
+    if (!window.isSecureContext) {
+      status.textContent = "O OCR precisa de uma página HTTPS.";
+      painel.hidden = false;
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      status.textContent =
+        "Este navegador não disponibiliza acesso à câmera.";
+      painel.hidden = false;
+      return;
+    }
+
+    if (typeof Tesseract === "undefined") {
+      status.textContent =
+        "A biblioteca OCR não carregou. Verifique a internet e recarregue.";
+      painel.hidden = false;
+      return;
+    }
+
+    pararOCR();
+    await pararLeitor();
+
+    const minhaSessao = ++sessaoOCR;
+    pararProcessamentoOCR = false;
+    painel.hidden = false;
+    botao.disabled = true;
+    status.textContent = "Solicitando acesso à câmera...";
+
+    try {
+      streamOCR = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+
+      if (minhaSessao !== sessaoOCR) return;
+
+      video.srcObject = streamOCR;
+      await video.play();
+
+      status.textContent =
+        "Carregando reconhecimento de texto. Aguarde...";
+
+      if (!workerOCR) {
+        workerOCR = await Tesseract.createWorker("eng");
+
+        await workerOCR.setParameters({
+          tessedit_char_whitelist:
+            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-",
+          tessedit_pageseg_mode: "11"
+        });
+      }
+
+      if (minhaSessao !== sessaoOCR) return;
+
+      status.textContent =
+        "Câmera ativa. Centralize os números impressos.";
+
+      executarOCR(minhaSessao);
+
+    } catch (erro) {
+      status.textContent =
+        "Não foi possível iniciar o OCR: " +
+        (erro.name ? erro.name + ": " : "") +
+        (erro.message || String(erro));
+
+      pararOCR();
+    } finally {
+      botao.disabled = false;
+    }
+  }
+
+  async function executarOCR(minhaSessao) {
+    if (processandoOCR) return;
+    processandoOCR = true;
+
+    const video = document.getElementById("videoOCR");
+    const status = document.getElementById("mensagemOCR");
+    const campo = document.getElementById("bpmOCR");
+
+    try {
+      while (
+        !pararProcessamentoOCR &&
+        minhaSessao === sessaoOCR
+      ) {
+        if (video.readyState >= 2 && video.videoWidth > 0) {
+          const canvas = document.createElement("canvas");
+
+          // Recorta a região central para reduzir texto irrelevante.
+          const largura = video.videoWidth;
+          const altura = video.videoHeight;
+          const recorteLargura = Math.floor(largura * 0.90);
+          const recorteAltura = Math.floor(altura * 0.45);
+          const x = Math.floor((largura - recorteLargura) / 2);
+          const y = Math.floor((altura - recorteAltura) / 2);
+
+          // Amplia o recorte para ajudar com números pequenos.
+          canvas.width = recorteLargura * 2;
+          canvas.height = recorteAltura * 2;
+
+          const contexto = canvas.getContext("2d");
+          contexto.filter = "grayscale(1) contrast(1.5)";
+          contexto.drawImage(
+            video,
+            x, y, recorteLargura, recorteAltura,
+            0, 0, canvas.width, canvas.height
+          );
+          contexto.filter = "none";
+
+          status.textContent = "Analisando a etiqueta...";
+
+          const resultado = await workerOCR.recognize(canvas);
+
+          if (
+            pararProcessamentoOCR ||
+            minhaSessao !== sessaoOCR
+          ) break;
+
+          const texto = resultado.data.text || "";
+
+          // Prioriza sequências numéricas, pois o BPM é um código.
+          const candidatos = texto.match(/\d{3,}/g) || [];
+
+          if (candidatos.length > 0) {
+            candidatos.sort((a, b) => b.length - a.length);
+
+            // Não sobrescreve o campo se o usuário estiver corrigindo.
+            if (
+              document.activeElement !== campo &&
+              (!campo.value || campo.dataset.auto === "true")
+            ) {
+              campo.value = candidatos[0];
+              campo.dataset.auto = "true";
+            }
+
+            status.textContent =
+              "Números detectados: " + candidatos.join(", ") +
+              ". Confira qual corresponde ao BPM.";
+          } else {
+            status.textContent =
+              "Nenhum número identificado. Aproxime a etiqueta, " +
+              "melhore a iluminação e mantenha a câmera firme.";
+          }
+        }
+
+        // Evita leituras contínuas excessivamente rápidas.
+        await new Promise(resolve => setTimeout(resolve, 700));
+      }
+    } catch (erro) {
+      if (minhaSessao === sessaoOCR && !pararProcessamentoOCR) {
+        status.textContent =
+          "Erro durante o OCR: " + (erro.message || String(erro));
+      }
+    } finally {
+      processandoOCR = false;
+    }
+  }
+
+  function confirmarOCR() {
+    const campo = document.getElementById("bpmOCR");
+    const bpm = campo.value.trim();
+    const status = document.getElementById("mensagemOCR");
+
+    if (!bpm) {
+      status.textContent =
+        "Informe ou reconheça o BPM antes de continuar.";
+      return;
+    }
+
+    pararOCR();
+
+    window.location.href =
+      APP_URL + "?bpm=" + encodeURIComponent(bpm);
+  }
+
+  function pararOCR() {
+    pararProcessamentoOCR = true;
+    sessaoOCR++;
+
+    const video = document.getElementById("videoOCR");
+    const painel = document.getElementById("painelOCR");
+    const botao = document.getElementById("iniciarOCR");
+
+    if (streamOCR) {
+      streamOCR.getTracks().forEach(track => track.stop());
+      streamOCR = null;
+    }
+
+    video.srcObject = null;
+    painel.hidden = true;
+    botao.disabled = false;
   }
 </script>
 </body>
